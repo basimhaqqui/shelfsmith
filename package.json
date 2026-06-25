@@ -1,0 +1,30 @@
+{
+  "name": "shelfsmith",
+  "version": "0.1.0",
+  "description": "Serverless AI product-content engine (CDK + Lambda + Bedrock + DynamoDB)",
+  "bin": {
+    "shelfsmith": "bin/shelfsmith.js"
+  },
+  "scripts": {
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy",
+    "seed": "ts-node scripts/seed.ts"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^20.14.0",
+    "aws-cdk": "^2.150.0",
+    "esbuild": "^0.23.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.600.0",
+    "@aws-sdk/client-cloudformation": "^3.600.0",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  }
+}

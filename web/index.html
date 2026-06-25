@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ShelfSmith — AI Product Content</title>
+  <script src="config.js"></script>
+  <style>
+    :root { --bg:#0f1220; --card:#181c2e; --accent:#6c8cff; --accent2:#37e6b0; --text:#e7e9f3; --muted:#9aa0bd; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+           background:radial-gradient(1200px 600px at 50% -10%,#202648,transparent),var(--bg);
+           background-color:var(--bg); color:var(--text); min-height:100vh; }
+    .wrap { max-width:760px; margin:0 auto; padding:48px 20px 80px; }
+    header h1 { font-size:34px; margin:0 0 6px; letter-spacing:-0.5px; }
+    header h1 span { background:linear-gradient(90deg,var(--accent),var(--accent2));
+                     -webkit-background-clip:text; background-clip:text; color:transparent; }
+    header p { color:var(--muted); margin:0 0 22px; }
+    .tabs { display:flex; gap:8px; margin-bottom:18px; }
+    .tab { background:#161a2c; border:1px solid #262b44; color:var(--muted); padding:9px 18px;
+           border-radius:10px; cursor:pointer; font-size:14px; font-weight:600; }
+    .tab.active { color:var(--text); border-color:var(--accent); }
+    .card { background:var(--card); border:1px solid #262b44; border-radius:16px; padding:22px; }
+    label { display:block; font-size:13px; color:var(--muted); margin:14px 0 6px; }
+    input, textarea { width:100%; background:#0e1120; border:1px solid #2a3050; color:var(--text);
+                      border-radius:10px; padding:12px 14px; font-size:15px; font-family:inherit; }
+    textarea { min-height:80px; resize:vertical; }
+    button.primary { margin-top:18px; width:100%; border:0; border-radius:10px; padding:14px;
+             font-size:16px; font-weight:600; color:#0c0f1a; cursor:pointer;
+             background:linear-gradient(90deg,var(--accent),var(--accent2)); }
+    button.primary:disabled { opacity:.55; cursor:progress; }
+    .result { margin-top:26px; display:none; }
+    .result.show { display:block; }
+    .badge { display:inline-block; background:#23284a; color:var(--accent2); border:1px solid #2f3760;
+             padding:4px 12px; border-radius:999px; font-size:13px; font-weight:600; }
+    .desc { line-height:1.6; margin:14px 0 0; }
+    .features { list-style:none; padding:0; margin:14px 0 0; }
+    .features li { padding:9px 0 9px 26px; position:relative; border-top:1px solid #232845; }
+    .features li:before { content:"✓"; position:absolute; left:0; color:var(--accent2); font-weight:700; }
+    .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+    .chip { background:#0e1120; border:1px solid #2a3050; color:var(--muted);
+            padding:6px 12px; border-radius:8px; font-size:13px; }
+    .err { color:#ff8a8a; margin-top:18px; display:none; }
+    .hint { color:var(--muted); font-size:12px; margin-top:10px; word-break:break-all; }
+    h3 { margin:22px 0 0; font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+    .item { border-top:1px solid #232845; padding:14px 0; }
+    .item:first-child { border-top:0; }
+    .item .t { font-weight:600; }
+    .item .c { color:var(--accent2); font-size:13px; margin-left:8px; }
+    .item .d { color:var(--muted); font-size:14px; margin-top:4px; line-height:1.5; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1><span>ShelfSmith</span></h1>
+      <p>Turn a raw product into polished catalog content with AI.</p>
+    </header>
+
+    <div class="tabs">
+      <div class="tab active" id="tabGen">Generate</div>
+      <div class="tab" id="tabCat">Catalog</div>
+    </div>
+
+    <!-- Generate view -->
+    <div id="genView">
+      <div class="card">
+        <label for="title">Product title</label>
+        <input id="title" placeholder="e.g. NovaSound Z9 Soundbar" value="AeroBass X2 Wireless Earbuds" />
+        <label for="specs">Specs</label>
+        <textarea id="specs">Bluetooth 5.3, ANC, 8h battery + 24h case, IPX5, USB-C</textarea>
+        <button class="primary" id="go">Generate content</button>
+        <div class="hint" id="endpointHint"></div>
+        <div class="err" id="err"></div>
+      </div>
+      <div class="result card" id="result">
+        <span class="badge" id="category"></span>
+        <p class="desc" id="description"></p>
+        <h3>Features</h3>
+        <ul class="features" id="features"></ul>
+        <h3>SEO keywords</h3>
+        <div class="chips" id="keywords"></div>
+      </div>
+    </div>
+
+    <!-- Catalog view -->
+    <div id="catView" class="hidden">
+      <div class="card">
+        <div id="catList">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const BASE = window.SHELFSMITH_API_BASE || "";
+    const ENRICH = BASE + "/enrich";
+    const PRODUCTS = BASE + "/products";
+    const $ = (id) => document.getElementById(id);
+    $("endpointHint").textContent = BASE ? ("API: " + BASE) : "API endpoint not configured";
+
+    // tab switching
+    $("tabGen").addEventListener("click", () => switchTab("gen"));
+    $("tabCat").addEventListener("click", () => switchTab("cat"));
+    function switchTab(which) {
+      const gen = which === "gen";
+      $("tabGen").classList.toggle("active", gen);
+      $("tabCat").classList.toggle("active", !gen);
+      $("genView").classList.toggle("hidden", !gen);
+      $("catView").classList.toggle("hidden", gen);
+      if (!gen) loadCatalog();
+    }
+
+    async function generate() {
+      const title = $("title").value.trim();
+      const specs = $("specs").value.trim();
+      $("err").style.display = "none";
+      $("result").classList.remove("show");
+      if (!title) { showErr("Please enter a product title."); return; }
+      const btn = $("go");
+      btn.disabled = true; btn.textContent = "Generating…";
+      try {
+        const res = await fetch(ENRICH, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title, specs }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+        render(data);
+      } catch (e) {
+        showErr("Request failed: " + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = "Generate content";
+      }
+    }
+
+    function render(d) {
+      $("category").textContent = d.category || "";
+      $("description").textContent = d.description || "";
+      $("features").innerHTML = (d.features || []).map((f) => "<li>" + esc(f) + "</li>").join("");
+      $("keywords").innerHTML = (d.keywords || []).map((k) => '<span class="chip">' + esc(k) + "</span>").join("");
+      $("result").classList.add("show");
+    }
+
+    async function loadCatalog() {
+      $("catList").textContent = "Loading…";
+      try {
+        const res = await fetch(PRODUCTS);
+        const data = await res.json();
+        const items = data.products || [];
+        if (!items.length) { $("catList").textContent = "No products yet — generate one!"; return; }
+        $("catList").innerHTML = items.map((p) =>
+          '<div class="item"><div><span class="t">' + esc(p.title || p.productId) + '</span>' +
+          (p.category ? '<span class="c">' + esc(p.category) + '</span>' : '') + '</div>' +
+          (p.description ? '<div class="d">' + esc(p.description) + '</div>' : '') + '</div>'
+        ).join("");
+      } catch (e) {
+        $("catList").textContent = "Failed to load catalog: " + e.message;
+      }
+    }
+
+    function showErr(m) { const e = $("err"); e.textContent = m; e.style.display = "block"; }
+    function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+    $("go").addEventListener("click", generate);
+  </script>
+</body>
+</html>
