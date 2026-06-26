@@ -38,45 +38,47 @@ export class ShelfSmithStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
+    const fn = (name: string, file: string, env: Record<string, string>, timeout = 10) =>
+      new NodejsFunction(this, name, {
+        runtime: Runtime.NODEJS_20_X,
+        entry: path.join(__dirname, '..', 'lambda', file),
+        handler: 'handler',
+        memorySize: 256,
+        timeout: Duration.seconds(timeout),
+        bundling: { minify: true, externalModules: [] },
+        environment: env,
+      });
+
     // enrich: Bedrock -> persist
-    const enrichFn = new NodejsFunction(this, 'EnrichFunction', {
-      runtime: Runtime.NODEJS_20_X,
-      entry: path.join(__dirname, '..', 'lambda', 'enrich.ts'),
-      handler: 'handler',
-      memorySize: 256,
-      timeout: Duration.seconds(30),
-      bundling: { minify: true, externalModules: [] },
-      environment: { MODEL_ID, TABLE_NAME: table.tableName },
-    });
+    const enrichFn = fn('EnrichFunction', 'enrich.ts', { MODEL_ID, TABLE_NAME: table.tableName }, 30);
     enrichFn.addToRolePolicy(invokeModel());
     enrichFn.addToRolePolicy(
       new PolicyStatement({ actions: ['dynamodb:PutItem'], resources: [table.tableArn] }),
     );
 
-    // products: read-only catalog list
-    const productsFn = new NodejsFunction(this, 'ProductsFunction', {
-      runtime: Runtime.NODEJS_20_X,
-      entry: path.join(__dirname, '..', 'lambda', 'products.ts'),
-      handler: 'handler',
-      memorySize: 256,
-      timeout: Duration.seconds(10),
-      bundling: { minify: true, externalModules: [] },
-      environment: { TABLE_NAME: table.tableName },
-    });
+    // products: read-only catalog list (scan)
+    const productsFn = fn('ProductsFunction', 'products.ts', { TABLE_NAME: table.tableName });
     productsFn.addToRolePolicy(
       new PolicyStatement({ actions: ['dynamodb:Scan'], resources: [table.tableArn] }),
     );
 
+    // get-product: single-item detail (GetItem)
+    const getProductFn = fn('GetProductFunction', 'get-product.ts', { TABLE_NAME: table.tableName });
+    getProductFn.addToRolePolicy(
+      new PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [table.tableArn] }),
+    );
+
+    // delete-product: remove a product + its reviews
+    const deleteFn = fn('DeleteProductFunction', 'delete-product.ts', { TABLE_NAME: table.tableName });
+    deleteFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ['dynamodb:Query', 'dynamodb:DeleteItem'],
+        resources: [table.tableArn],
+      }),
+    );
+
     // review-digest: scan reviews -> Bedrock summary -> persist
-    const digestFn = new NodejsFunction(this, 'ReviewDigestFunction', {
-      runtime: Runtime.NODEJS_20_X,
-      entry: path.join(__dirname, '..', 'lambda', 'review-digest.ts'),
-      handler: 'handler',
-      memorySize: 256,
-      timeout: Duration.seconds(60),
-      bundling: { minify: true, externalModules: [] },
-      environment: { MODEL_ID, TABLE_NAME: table.tableName },
-    });
+    const digestFn = fn('ReviewDigestFunction', 'review-digest.ts', { MODEL_ID, TABLE_NAME: table.tableName }, 60);
     digestFn.addToRolePolicy(invokeModel());
     digestFn.addToRolePolicy(
       new PolicyStatement({
@@ -91,26 +93,19 @@ export class ShelfSmithStack extends Stack {
       targets: [new LambdaFunction(digestFn)],
     });
 
-    // HTTP API with CORS for the browser UI
     const httpApi = new HttpApi(this, 'ShelfSmithApi', {
       apiName: 'shelfsmith-api',
       description: 'ShelfSmith product enrichment + catalog endpoints',
       corsPreflight: {
         allowOrigins: ['*'],
-        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.OPTIONS],
+        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.DELETE, CorsHttpMethod.OPTIONS],
         allowHeaders: ['content-type'],
       },
     });
-    httpApi.addRoutes({
-      path: '/enrich',
-      methods: [HttpMethod.POST],
-      integration: new HttpLambdaIntegration('EnrichIntegration', enrichFn),
-    });
-    httpApi.addRoutes({
-      path: '/products',
-      methods: [HttpMethod.GET],
-      integration: new HttpLambdaIntegration('ProductsIntegration', productsFn),
-    });
+    httpApi.addRoutes({ path: '/enrich', methods: [HttpMethod.POST], integration: new HttpLambdaIntegration('EnrichIntegration', enrichFn) });
+    httpApi.addRoutes({ path: '/products', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('ProductsIntegration', productsFn) });
+    httpApi.addRoutes({ path: '/products/{id}', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('GetProductIntegration', getProductFn) });
+    httpApi.addRoutes({ path: '/products/{id}', methods: [HttpMethod.DELETE], integration: new HttpLambdaIntegration('DeleteIntegration', deleteFn) });
 
     // Static web UI: private S3 + CloudFront (OAC, HTTPS)
     const siteBucket = new Bucket(this, 'WebBucket', {
