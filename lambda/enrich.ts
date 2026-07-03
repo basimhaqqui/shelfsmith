@@ -62,7 +62,7 @@ function parseEnriched(raw: string): Enriched {
   };
 }
 
-export const handler = async (
+const enrich = async (
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyResultV2> => {
   // validate the request
@@ -119,4 +119,17 @@ export const handler = async (
   }
 
   return json(201, { productId, title, ...enriched, createdAt });
+};
+
+export const handler = async (
+  event: APIGatewayProxyEventV2,
+): Promise<APIGatewayProxyResultV2> => {
+  try {
+    return await enrich(event);
+  } catch (err) {
+    // Log unexpected failures for CloudWatch, but do not expose implementation
+    // details or stack traces to API clients.
+    console.error('unexpected enrichment failure', err);
+    return json(500, { error: 'internal server error' });
+  }
 };
