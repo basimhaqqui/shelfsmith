@@ -4,7 +4,7 @@ import { extractJsonObject } from './parse';
 const bedrock = new BedrockRuntimeClient({});
 const MODEL_ID = process.env.MODEL_ID!;
 
-const SYSTEM_PROMPT = `You are a product-content writer for an e-commerce consumer-electronics catalog
+export const SYSTEM_PROMPT = `You are a product-content writer for an e-commerce consumer-electronics catalog
 (audio gear, appliances, vehicle accessories). Given a raw product, write polished catalog content.
 Respond with ONLY a single JSON object — no markdown fences, no commentary — with exactly these keys:
   "description": string, a 2-3 sentence marketing description,
@@ -43,19 +43,22 @@ export function parseEnriched(raw: string): Enriched {
   };
 }
 
+// Build the Converse user-message content for a product.
+export function buildUserContent(title: string, specs: unknown) {
+  const text = `Title: ${title}\n` + `Specs: ${typeof specs === 'string' ? specs : JSON.stringify(specs)}`;
+  return [{ text }];
+}
+
 // Shared by POST /enrich and PUT /products/{id}: run the model + parse defensively.
 export async function enrichProduct(
   title: string,
   specs: unknown,
 ): Promise<{ enriched: Enriched; tokens: Tokens }> {
-  const userPrompt =
-    `Title: ${title}\n` + `Specs: ${typeof specs === 'string' ? specs : JSON.stringify(specs)}`;
-
   const res = await bedrock.send(
     new ConverseCommand({
       modelId: MODEL_ID,
       system: [{ text: SYSTEM_PROMPT }],
-      messages: [{ role: 'user', content: [{ text: userPrompt }] }],
+      messages: [{ role: 'user', content: buildUserContent(title, specs) }],
       inferenceConfig: { maxTokens: 1024, temperature: 0.5 },
     }),
   );

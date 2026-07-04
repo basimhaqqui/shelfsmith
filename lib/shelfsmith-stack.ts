@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { Construct } from 'constructs';
 import { Stack, StackProps, Duration, CfnOutput, RemovalPolicy } from 'aws-cdk-lib';
-import { Runtime } from 'aws-cdk-lib/aws-lambda';
+import { Runtime, FunctionUrlAuthType, InvokeMode, HttpMethod as FnUrlHttpMethod } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { HttpApi, HttpMethod, CorsHttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
@@ -55,6 +55,20 @@ export class ShelfSmithStack extends Stack {
     enrichFn.addToRolePolicy(
       new PolicyStatement({ actions: ['dynamodb:PutItem'], resources: [table.tableArn] }),
     );
+
+    // stream-enrich: streaming variant over a Lambda Function URL (API Gateway can't stream)
+    const streamFn = fn('StreamEnrichFunction', 'stream-enrich.ts', { MODEL_ID, TABLE_NAME: table.tableName }, 60);
+    streamFn.addToRolePolicy(
+      new PolicyStatement({ actions: ['bedrock:InvokeModelWithResponseStream'], resources: bedrockResources }),
+    );
+    streamFn.addToRolePolicy(
+      new PolicyStatement({ actions: ['dynamodb:PutItem'], resources: [table.tableArn] }),
+    );
+    const streamUrl = streamFn.addFunctionUrl({
+      authType: FunctionUrlAuthType.NONE,
+      invokeMode: InvokeMode.RESPONSE_STREAM,
+      cors: { allowedOrigins: ['*'], allowedMethods: [FnUrlHttpMethod.POST], allowedHeaders: ['content-type'] },
+    });
 
     // products: read-only catalog list (scan)
     const productsFn = fn('ProductsFunction', 'products.ts', { TABLE_NAME: table.tableName });
@@ -142,12 +156,17 @@ export class ShelfSmithStack extends Stack {
       distributionPaths: ['/*'],
       sources: [
         Source.asset(path.join(__dirname, '..', 'web')),
-        Source.data('config.js', `window.SHELFSMITH_API_BASE = "${httpApi.apiEndpoint}";`),
+        Source.data(
+          'config.js',
+          `window.SHELFSMITH_API_BASE = "${httpApi.apiEndpoint}";\n` +
+            `window.SHELFSMITH_STREAM_URL = "${streamUrl.url}";`,
+        ),
       ],
     });
 
     new CfnOutput(this, 'WebUrl', { value: `https://${distribution.distributionDomainName}` });
     new CfnOutput(this, 'ApiUrl', { value: httpApi.apiEndpoint });
+    new CfnOutput(this, 'StreamUrl', { value: streamUrl.url });
     new CfnOutput(this, 'EnrichEndpoint', { value: `${httpApi.apiEndpoint}/enrich` });
     new CfnOutput(this, 'TableName', { value: table.tableName });
     new CfnOutput(this, 'DigestFunctionName', { value: digestFn.functionName });

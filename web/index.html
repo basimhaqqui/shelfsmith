@@ -190,6 +190,7 @@
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
     $("endpointHint").textContent = BASE ? ("API: " + BASE) : "API endpoint not configured";
 
+    const STREAM_URL = window.SHELFSMITH_STREAM_URL || "";
     let lastGenerated = null;   // most recent enrich result (for copy buttons)
     let catalog = [];           // loaded product list (for search/sort)
     let currentDetail = null;   // product shown in the detail modal
@@ -270,29 +271,60 @@
     $("confirmCancel").addEventListener("click", () => settleConfirm(false));
     $("confirmOverlay").addEventListener("click", (e) => { if (e.target === $("confirmOverlay")) settleConfirm(false); });
 
-    /* ---------- generate ---------- */
+    /* ---------- generate (streaming, with non-streaming fallback) ---------- */
     async function generate() {
       const title = $("title").value.trim();
       const specs = $("specs").value.trim();
       $("err").style.display = "none";
       $("result").classList.remove("show");
       if (!title) { showErr("Please enter a product title."); return; }
+      const body = { title, specs };
       const btn = $("go"); btn.disabled = true; btn.textContent = "Generating…";
       try {
-        const res = await fetch(ENRICH, {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title, specs }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
-        lastGenerated = data;
-        renderResult(data);
+        if (STREAM_URL) await generateStreaming(body);
+        else await generateOnce(body);
         catalog = []; // catalog list is now stale
       } catch (e) {
         showErr("Request failed: " + e.message);
       } finally {
         btn.disabled = false; btn.textContent = "Generate content";
       }
+    }
+    async function generateOnce(body) {
+      const res = await fetch(ENRICH, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      lastGenerated = data;
+      renderResult(data);
+    }
+    async function generateStreaming(body) {
+      const res = await fetch(STREAM_URL, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+      // reset the result card and stream the description live
+      $("category").textContent = ""; $("features").innerHTML = ""; $("keywords").innerHTML = "";
+      $("tokens").textContent = ""; $("description").textContent = ""; $("result").classList.add("show");
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const sep = buf.indexOf("<<<STRUCTURED>>>");
+        $("description").textContent = sep >= 0 ? buf.slice(0, sep).trim() : buf;
+      }
+      const mi = buf.indexOf("<<<META>>>");
+      if (mi < 0) throw new Error("stream ended unexpectedly");
+      const meta = JSON.parse(buf.slice(mi + "<<<META>>>".length));
+      if (meta.error) throw new Error(meta.error);
+      const sep = buf.indexOf("<<<STRUCTURED>>>");
+      const description = (sep >= 0 ? buf.slice(0, sep) : buf).trim();
+      lastGenerated = { description, category: meta.category, features: meta.features, keywords: meta.keywords, tokens: meta.tokens };
+      renderResult(lastGenerated);
     }
     function renderResult(d) {
       $("category").textContent = d.category || "";
