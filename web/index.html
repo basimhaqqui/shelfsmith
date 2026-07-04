@@ -72,6 +72,11 @@
     .rm:disabled { opacity:.5; cursor:progress; }
     .hidden { display:none; }
     .empty { color:var(--muted); padding:8px 0; }
+    /* bulk progress */
+    .bar { height:12px; background:#0e1120; border:1px solid #2a3050; border-radius:999px; overflow:hidden; }
+    .bar-fill { height:100%; width:0; border-radius:999px; transition:width .3s;
+                background:linear-gradient(90deg,var(--accent),var(--accent2)); }
+    input[type=file] { padding:9px 12px; }
     /* insights */
     .pcard { background:var(--card); border:1px solid #262b44; border-radius:16px; padding:22px; margin-bottom:16px; }
     .pcard:last-child { margin-bottom:0; }
@@ -113,6 +118,7 @@
 
     <div class="tabs" role="tablist" aria-label="Sections">
       <button class="tab active" id="tabGen" role="tab" aria-selected="true" aria-controls="genView">Generate</button>
+      <button class="tab" id="tabBulk" role="tab" aria-selected="false" aria-controls="bulkView">Bulk</button>
       <button class="tab" id="tabCat" role="tab" aria-selected="false" aria-controls="catView">Catalog</button>
       <button class="tab" id="tabIns" role="tab" aria-selected="false" aria-controls="insView">Insights</button>
     </div>
@@ -137,6 +143,22 @@
         <div class="chips" id="keywords"></div>
         <div class="row"><button class="mini" data-copy="keywords">Copy keywords</button></div>
         <div class="meta" id="tokens"></div>
+      </div>
+    </div>
+
+    <div id="bulkView" class="hidden" role="tabpanel" aria-labelledby="tabBulk">
+      <div class="card">
+        <p style="margin:0 0 4px">Upload a CSV to enrich a whole catalog at once. Columns: <code>title</code> and <code>specs</code>.</p>
+        <a id="tmplLink" class="hint" href="#" download="shelfsmith-template.csv" style="color:var(--accent)">Download a template CSV</a>
+        <label for="csvInput">CSV file</label>
+        <input id="csvInput" type="file" accept=".csv,text/csv" />
+        <div id="bulkPreview" class="hint"></div>
+        <button class="primary" id="bulkGo" disabled>Enrich products</button>
+        <div id="bulkProgress" class="hidden" style="margin-top:20px">
+          <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+          <div class="meta" id="bulkStatus"></div>
+        </div>
+        <div class="err" id="bulkErr" role="alert"></div>
       </div>
     </div>
 
@@ -186,6 +208,7 @@
     const ENRICH = BASE + "/enrich";
     const PRODUCTS = BASE + "/products";
     const DIGEST = BASE + "/digest";
+    const BULK = BASE + "/bulk";
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
     $("endpointHint").textContent = BASE ? ("API: " + BASE) : "API endpoint not configured";
@@ -198,6 +221,7 @@
     /* ---------- tabs ---------- */
     const TABS = {
       gen: { tab: "tabGen", view: "genView" },
+      bulk: { tab: "tabBulk", view: "bulkView" },
       cat: { tab: "tabCat", view: "catView", load: loadCatalog },
       ins: { tab: "tabIns", view: "insView", load: loadDigest },
     };
@@ -502,6 +526,101 @@
         }
       }
     });
+
+    /* ---------- bulk CSV enrichment ---------- */
+    let bulkProducts = [];
+    // minimal CSV parser (handles quoted fields, escaped quotes, CRLF)
+    function parseCSV(text) {
+      const rows = []; let row = [], field = "", inQ = false;
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (inQ) {
+          if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+          else field += c;
+        } else if (c === '"') inQ = true;
+        else if (c === ",") { row.push(field); field = ""; }
+        else if (c === "\n" || c === "\r") {
+          if (c === "\r" && text[i + 1] === "\n") i++;
+          row.push(field); field = "";
+          if (row.some((v) => v !== "")) rows.push(row);
+          row = [];
+        } else field += c;
+      }
+      if (field !== "" || row.length) { row.push(field); if (row.some((v) => v !== "")) rows.push(row); }
+      return rows;
+    }
+    function rowsToProducts(rows) {
+      if (!rows.length) return [];
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const ti = header.indexOf("title"), si = header.indexOf("specs");
+      if (ti === -1) throw new Error('CSV must have a "title" column');
+      return rows.slice(1)
+        .map((r) => ({ title: (r[ti] || "").trim(), specs: si >= 0 ? (r[si] || "").trim() : "" }))
+        .filter((p) => p.title);
+    }
+    // template download
+    const TEMPLATE = "title,specs\nNovaSound Z9 Soundbar,\"120W, Dolby Atmos, HDMI eARC, wireless sub\"\nPeakView 4K Action Cam,\"4K60, waterproof 10m, image stabilization\"\n";
+    $("tmplLink").href = "data:text/csv;charset=utf-8," + encodeURIComponent(TEMPLATE);
+
+    $("csvInput").addEventListener("change", async (e) => {
+      $("bulkErr").style.display = "none";
+      const f = e.target.files[0];
+      if (!f) { bulkProducts = []; $("bulkPreview").textContent = ""; $("bulkGo").disabled = true; return; }
+      try {
+        const text = await f.text();
+        bulkProducts = rowsToProducts(parseCSV(text));
+        if (!bulkProducts.length) throw new Error("no rows with a title found");
+        const sample = bulkProducts.slice(0, 3).map((p) => p.title).join(", ");
+        $("bulkPreview").textContent = "Found " + bulkProducts.length + " product" + (bulkProducts.length === 1 ? "" : "s") + " — e.g. " + sample;
+        $("bulkGo").disabled = false;
+      } catch (err) {
+        bulkProducts = []; $("bulkGo").disabled = true; $("bulkPreview").textContent = "";
+        $("bulkErr").textContent = "Could not read CSV: " + err.message; $("bulkErr").style.display = "block";
+      }
+    });
+
+    async function runBulk() {
+      if (!bulkProducts.length) return;
+      $("bulkErr").style.display = "none";
+      const btn = $("bulkGo"); btn.disabled = true; btn.textContent = "Submitting…";
+      try {
+        const res = await fetch(BULK, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ products: bulkProducts }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+        $("bulkProgress").classList.remove("hidden");
+        btn.textContent = "Enriching…";
+        await pollBulk(data.jobId, data.total);
+        catalog = []; // catalog is now stale
+      } catch (e) {
+        $("bulkErr").textContent = "Bulk enrich failed: " + e.message; $("bulkErr").style.display = "block";
+      } finally {
+        btn.disabled = false; btn.textContent = "Enrich products";
+      }
+    }
+    function pollBulk(jobId, total) {
+      return new Promise((resolve) => {
+        const tick = async () => {
+          try {
+            const res = await fetch(BULK + "/" + encodeURIComponent(jobId));
+            const j = await res.json();
+            const done = (j.completed || 0) + (j.failed || 0);
+            const pct = total ? Math.round((done / total) * 100) : 0;
+            $("barFill").style.width = pct + "%";
+            $("bulkStatus").textContent = done + " / " + total + " done" + (j.failed ? " · " + j.failed + " failed" : "");
+            if (j.done) {
+              $("bulkStatus").textContent = "Complete — " + (j.completed || 0) + " enriched" + (j.failed ? ", " + j.failed + " failed" : "") + ". View them in the Catalog.";
+              toast("Bulk enrichment complete");
+              resolve();
+            } else setTimeout(tick, 1500);
+          } catch { setTimeout(tick, 2000); }
+        };
+        tick();
+      });
+    }
+    $("bulkGo").addEventListener("click", runBulk);
 
     /* ---------- insights ---------- */
     function digestCard(d) {

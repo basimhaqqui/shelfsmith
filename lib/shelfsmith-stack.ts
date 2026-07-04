@@ -2,13 +2,15 @@ import * as path from 'path';
 import { Construct } from 'constructs';
 import { Stack, StackProps, Duration, CfnOutput, RemovalPolicy } from 'aws-cdk-lib';
 import { Runtime, FunctionUrlAuthType, InvokeMode, HttpMethod as FnUrlHttpMethod } from 'aws-cdk-lib/aws-lambda';
-import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { HttpApi, HttpMethod, CorsHttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Table, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
+import { Queue } from 'aws-cdk-lib/aws-sqs';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Bucket, BlockPublicAccess } from 'aws-cdk-lib/aws-s3';
 import { Distribution, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
@@ -38,7 +40,13 @@ export class ShelfSmithStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    const fn = (name: string, file: string, env: Record<string, string>, timeout = 10) =>
+    const fn = (
+      name: string,
+      file: string,
+      env: Record<string, string>,
+      timeout = 10,
+      opts: Partial<NodejsFunctionProps> = {},
+    ) =>
       new NodejsFunction(this, name, {
         runtime: Runtime.NODEJS_20_X,
         entry: path.join(__dirname, '..', 'lambda', file),
@@ -47,6 +55,7 @@ export class ShelfSmithStack extends Stack {
         timeout: Duration.seconds(timeout),
         bundling: { minify: true, externalModules: [] },
         environment: env,
+        ...opts,
       });
 
     // enrich: Bedrock -> persist
@@ -69,6 +78,44 @@ export class ShelfSmithStack extends Stack {
       invokeMode: InvokeMode.RESPONSE_STREAM,
       cors: { allowedOrigins: ['*'], allowedMethods: [FnUrlHttpMethod.POST], allowedHeaders: ['content-type'] },
     });
+
+    // ---- bulk enrichment pipeline: CSV -> submit -> SQS fan-out -> workers -> DynamoDB ----
+    const enrichDlq = new Queue(this, 'EnrichDLQ', { retentionPeriod: Duration.days(14) });
+    const enrichQueue = new Queue(this, 'EnrichQueue', {
+      visibilityTimeout: Duration.seconds(360), // >= worker timeout
+      deadLetterQueue: { queue: enrichDlq, maxReceiveCount: 3 },
+    });
+
+    // bulk-submit: create a job record + enqueue one message per product
+    const bulkSubmitFn = fn('BulkSubmitFunction', 'bulk-submit.ts', { TABLE_NAME: table.tableName, QUEUE_URL: enrichQueue.queueUrl }, 30);
+    bulkSubmitFn.addToRolePolicy(
+      new PolicyStatement({ actions: ['dynamodb:PutItem'], resources: [table.tableArn] }),
+    );
+    enrichQueue.grantSendMessages(bulkSubmitFn);
+
+    // bulk-worker: enrich one product per SQS message. maxConcurrency caps how many
+    // workers run at once to stay under Bedrock rate limits (without reserving account concurrency).
+    const bulkWorkerFn = fn('BulkWorkerFunction', 'bulk-worker.ts', { MODEL_ID, TABLE_NAME: table.tableName }, 60);
+    bulkWorkerFn.addToRolePolicy(invokeModel());
+    bulkWorkerFn.addToRolePolicy(
+      new PolicyStatement({ actions: ['dynamodb:PutItem', 'dynamodb:UpdateItem'], resources: [table.tableArn] }),
+    );
+    bulkWorkerFn.addEventSource(
+      new SqsEventSource(enrichQueue, { batchSize: 5, maxConcurrency: 5, reportBatchItemFailures: true }),
+    );
+
+    // bulk-dlq: terminal failures land here; count them so completed + failed == total
+    const bulkDlqFn = fn('BulkDlqFunction', 'bulk-dlq.ts', { TABLE_NAME: table.tableName });
+    bulkDlqFn.addToRolePolicy(
+      new PolicyStatement({ actions: ['dynamodb:UpdateItem'], resources: [table.tableArn] }),
+    );
+    bulkDlqFn.addEventSource(new SqsEventSource(enrichDlq, { batchSize: 10 }));
+
+    // bulk-status: poll a job's progress
+    const bulkStatusFn = fn('BulkStatusFunction', 'bulk-status.ts', { TABLE_NAME: table.tableName });
+    bulkStatusFn.addToRolePolicy(
+      new PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [table.tableArn] }),
+    );
 
     // products: read-only catalog list (scan)
     const productsFn = fn('ProductsFunction', 'products.ts', { TABLE_NAME: table.tableName });
@@ -135,6 +182,8 @@ export class ShelfSmithStack extends Stack {
     httpApi.addRoutes({ path: '/products/{id}', methods: [HttpMethod.PUT], integration: new HttpLambdaIntegration('UpdateIntegration', updateFn) });
     httpApi.addRoutes({ path: '/products/{id}', methods: [HttpMethod.DELETE], integration: new HttpLambdaIntegration('DeleteIntegration', deleteFn) });
     httpApi.addRoutes({ path: '/digest', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('GetDigestIntegration', getDigestFn) });
+    httpApi.addRoutes({ path: '/bulk', methods: [HttpMethod.POST], integration: new HttpLambdaIntegration('BulkSubmitIntegration', bulkSubmitFn) });
+    httpApi.addRoutes({ path: '/bulk/{jobId}', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('BulkStatusIntegration', bulkStatusFn) });
 
     // Static web UI: private S3 + CloudFront (OAC, HTTPS)
     const siteBucket = new Bucket(this, 'WebBucket', {
