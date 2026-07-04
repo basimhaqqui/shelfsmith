@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ShelfSmith — AI Product Content</title>
+  <meta name="description" content="Turn a raw product into polished catalog content, and see AI-summarized review sentiment per product." />
   <script src="config.js"></script>
   <style>
     :root { --bg:#0f1220; --card:#181c2e; --accent:#6c8cff; --accent2:#37e6b0; --text:#e7e9f3; --muted:#9aa0bd; --danger:#ff7a7a; }
@@ -18,17 +19,19 @@
     header p { color:var(--muted); margin:0 0 22px; }
     .tabs { display:flex; gap:8px; margin-bottom:18px; }
     .tab { background:#161a2c; border:1px solid #262b44; color:var(--muted); padding:9px 18px;
-           border-radius:10px; cursor:pointer; font-size:14px; font-weight:600; }
+           border-radius:10px; cursor:pointer; font-size:14px; font-weight:600; font-family:inherit; }
     .tab.active { color:var(--text); border-color:var(--accent); }
+    .tab:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
     .card { background:var(--card); border:1px solid #262b44; border-radius:16px; padding:22px; }
     label { display:block; font-size:13px; color:var(--muted); margin:14px 0 6px; }
-    input, textarea { width:100%; background:#0e1120; border:1px solid #2a3050; color:var(--text);
+    input, textarea, select { width:100%; background:#0e1120; border:1px solid #2a3050; color:var(--text);
                       border-radius:10px; padding:12px 14px; font-size:15px; font-family:inherit; }
     textarea { min-height:80px; resize:vertical; }
     button.primary { margin-top:18px; width:100%; border:0; border-radius:10px; padding:14px;
-             font-size:16px; font-weight:600; color:#0c0f1a; cursor:pointer;
+             font-size:16px; font-weight:600; color:#0c0f1a; cursor:pointer; font-family:inherit;
              background:linear-gradient(90deg,var(--accent),var(--accent2)); }
     button.primary:disabled { opacity:.55; cursor:progress; }
+    button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
     .result { margin-top:26px; display:none; }
     .result.show { display:block; }
     .badge { display:inline-block; background:#23284a; color:var(--accent2); border:1px solid #2f3760;
@@ -43,6 +46,18 @@
     .err { color:#ff8a8a; margin-top:18px; display:none; }
     .hint { color:var(--muted); font-size:12px; margin-top:10px; word-break:break-all; }
     h3 { margin:22px 0 0; font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+    /* small secondary buttons */
+    .mini { margin-top:12px; background:#1c2138; border:1px solid #2a3050; color:var(--text);
+            border-radius:8px; padding:7px 14px; font-size:13px; cursor:pointer; font-family:inherit; }
+    .mini:hover { background:#232a45; }
+    .mini.ghost { background:transparent; }
+    .mini.danger { color:var(--danger); border-color:#4a2a35; }
+    .mini.danger:hover { background:#311a23; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    /* catalog */
+    .toolbar { display:flex; gap:10px; margin-bottom:16px; }
+    .toolbar input { flex:1; }
+    .toolbar select { width:auto; }
     .item { border-top:1px solid #232845; padding:14px 0; display:flex; gap:14px; align-items:flex-start; cursor:pointer; }
     .item:first-child { border-top:0; }
     .item:hover { background:#1c2138; }
@@ -52,10 +67,11 @@
     .item .d { color:var(--muted); font-size:14px; margin-top:4px; line-height:1.5;
                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .rm { flex:none; background:#241726; border:1px solid #4a2a35; color:var(--danger);
-          border-radius:8px; padding:7px 12px; font-size:13px; cursor:pointer; }
+          border-radius:8px; padding:7px 12px; font-size:13px; cursor:pointer; font-family:inherit; }
     .rm:hover { background:#311a23; }
     .rm:disabled { opacity:.5; cursor:progress; }
     .hidden { display:none; }
+    .empty { color:var(--muted); padding:8px 0; }
     /* insights */
     .pcard { background:var(--card); border:1px solid #262b44; border-radius:16px; padding:22px; margin-bottom:16px; }
     .pcard:last-child { margin-bottom:0; }
@@ -75,10 +91,17 @@
     .overlay.show { display:flex; }
     .modal { background:var(--card); border:1px solid #2a3050; border-radius:16px;
              max-width:620px; width:100%; max-height:85vh; overflow:auto; padding:24px; position:relative; }
+    .modal.small { max-width:420px; }
     .modal h2 { margin:0 28px 4px 0; font-size:22px; }
     .x { position:absolute; top:16px; right:18px; background:none; border:0; color:var(--muted);
-         font-size:22px; cursor:pointer; line-height:1; }
+         font-size:22px; cursor:pointer; line-height:1; font-family:inherit; }
     .meta { color:var(--muted); font-size:12px; margin-top:14px; word-break:break-all; }
+    .divider { border-top:1px solid #262b44; margin:20px 0 0; }
+    /* toast */
+    .toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(20px);
+             background:#1c2138; border:1px solid #2f3760; color:var(--text); padding:12px 20px;
+             border-radius:10px; font-size:14px; opacity:0; pointer-events:none; transition:.2s; z-index:60; }
+    .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
@@ -88,13 +111,13 @@
       <p>Turn a raw product into polished catalog content with AI.</p>
     </header>
 
-    <div class="tabs">
-      <div class="tab active" id="tabGen">Generate</div>
-      <div class="tab" id="tabCat">Catalog</div>
-      <div class="tab" id="tabIns">Insights</div>
+    <div class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab active" id="tabGen" role="tab" aria-selected="true" aria-controls="genView">Generate</button>
+      <button class="tab" id="tabCat" role="tab" aria-selected="false" aria-controls="catView">Catalog</button>
+      <button class="tab" id="tabIns" role="tab" aria-selected="false" aria-controls="insView">Insights</button>
     </div>
 
-    <div id="genView">
+    <div id="genView" role="tabpanel" aria-labelledby="tabGen">
       <div class="card">
         <label for="title">Product title</label>
         <input id="title" placeholder="e.g. NovaSound Z9 Soundbar" value="AeroBass X2 Wireless Earbuds" />
@@ -102,37 +125,61 @@
         <textarea id="specs">Bluetooth 5.3, ANC, 8h battery + 24h case, IPX5, USB-C</textarea>
         <button class="primary" id="go">Generate content</button>
         <div class="hint" id="endpointHint"></div>
-        <div class="err" id="err"></div>
+        <div class="err" id="err" role="alert"></div>
       </div>
-      <div class="result card" id="result">
+      <div class="result card" id="result" aria-live="polite">
         <span class="badge" id="category"></span>
         <p class="desc" id="description"></p>
+        <div class="row"><button class="mini" data-copy="description">Copy description</button></div>
         <h3>Features</h3>
         <ul class="features" id="features"></ul>
         <h3>SEO keywords</h3>
         <div class="chips" id="keywords"></div>
+        <div class="row"><button class="mini" data-copy="keywords">Copy keywords</button></div>
         <div class="meta" id="tokens"></div>
       </div>
     </div>
 
-    <div id="catView" class="hidden">
+    <div id="catView" class="hidden" role="tabpanel" aria-labelledby="tabCat">
+      <div class="toolbar">
+        <input id="catSearch" placeholder="Search products…" aria-label="Search products" />
+        <select id="catSort" aria-label="Sort products">
+          <option value="new">Newest</option>
+          <option value="old">Oldest</option>
+          <option value="title">Title A–Z</option>
+          <option value="category">Category</option>
+        </select>
+      </div>
       <div class="card">
-        <div id="catList">Loading…</div>
+        <div id="catList" aria-live="polite">Loading…</div>
       </div>
     </div>
 
-    <div id="insView" class="hidden">
-      <div id="digest">Loading…</div>
+    <div id="insView" class="hidden" role="tabpanel" aria-labelledby="tabIns">
+      <div id="digest" aria-live="polite">Loading…</div>
     </div>
   </div>
 
   <!-- detail modal -->
   <div class="overlay" id="overlay">
-    <div class="modal" id="modal">
+    <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <button class="x" id="closeModal" aria-label="Close">&times;</button>
       <div id="modalBody"></div>
     </div>
   </div>
+
+  <!-- confirm dialog -->
+  <div class="overlay" id="confirmOverlay">
+    <div class="modal small" role="alertdialog" aria-modal="true" aria-labelledby="confirmMsg">
+      <p id="confirmMsg" style="margin:0 0 18px; line-height:1.5"></p>
+      <div class="row" style="justify-content:flex-end">
+        <button class="mini ghost" id="confirmCancel">Cancel</button>
+        <button class="mini danger" id="confirmOk">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script>
     const BASE = window.SHELFSMITH_API_BASE || "";
@@ -140,67 +187,297 @@
     const PRODUCTS = BASE + "/products";
     const DIGEST = BASE + "/digest";
     const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
     $("endpointHint").textContent = BASE ? ("API: " + BASE) : "API endpoint not configured";
 
+    let lastGenerated = null;   // most recent enrich result (for copy buttons)
+    let catalog = [];           // loaded product list (for search/sort)
+    let currentDetail = null;   // product shown in the detail modal
+
+    /* ---------- tabs ---------- */
     const TABS = {
       gen: { tab: "tabGen", view: "genView" },
-      cat: { tab: "tabCat", view: "catView", load: () => loadCatalog() },
-      ins: { tab: "tabIns", view: "insView", load: () => loadDigest() },
+      cat: { tab: "tabCat", view: "catView", load: loadCatalog },
+      ins: { tab: "tabIns", view: "insView", load: loadDigest },
     };
     Object.entries(TABS).forEach(([k, t]) => $(t.tab).addEventListener("click", () => switchTab(k)));
     function switchTab(which) {
       Object.entries(TABS).forEach(([k, t]) => {
         const on = k === which;
         $(t.tab).classList.toggle("active", on);
+        $(t.tab).setAttribute("aria-selected", on ? "true" : "false");
         $(t.view).classList.toggle("hidden", !on);
       });
+      window.scrollTo({ top: 0 });
       if (TABS[which].load) TABS[which].load();
     }
 
+    /* ---------- toast + copy ---------- */
+    let toastTimer;
+    function toast(msg) {
+      const t = $("toast"); t.textContent = msg; t.classList.add("show");
+      clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+    }
+    async function copyText(text, label) {
+      try { await navigator.clipboard.writeText(text); toast(label + " copied"); }
+      catch { toast("Copy failed"); }
+    }
+    $("result").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-copy]"); if (!b || !lastGenerated) return;
+      if (b.dataset.copy === "description") copyText(lastGenerated.description || "", "Description");
+      else copyText((lastGenerated.keywords || []).join(", "), "Keywords");
+    });
+
+    /* ---------- overlays: focus trap + restore ---------- */
+    function focusable(el) {
+      return Array.from(el.querySelectorAll('button,[href],input,textarea,select,[tabindex]:not([tabindex="-1"])'))
+        .filter((n) => !n.disabled && n.offsetParent !== null);
+    }
+    function openOverlay(id) {
+      const ov = $(id);
+      ov._return = document.activeElement;
+      ov.classList.add("show");
+      const f = focusable(ov); if (f.length) f[0].focus();
+      ov._trap = (e) => {
+        if (e.key === "Escape") { closeOverlay(id); return; }
+        if (e.key !== "Tab") return;
+        const items = focusable(ov); if (!items.length) return;
+        const first = items[0], last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      };
+      document.addEventListener("keydown", ov._trap);
+    }
+    function closeOverlay(id) {
+      const ov = $(id);
+      ov.classList.remove("show");
+      if (ov._trap) { document.removeEventListener("keydown", ov._trap); ov._trap = null; }
+      if (ov._return && ov._return.focus) ov._return.focus();
+      ov._return = null;
+    }
+    $("closeModal").addEventListener("click", () => closeOverlay("overlay"));
+    $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeOverlay("overlay"); });
+
+    /* ---------- confirm dialog (promise-based) ---------- */
+    let confirmResolve = null;
+    function confirmDialog(message) {
+      $("confirmMsg").textContent = message;
+      openOverlay("confirmOverlay");
+      return new Promise((resolve) => { confirmResolve = resolve; });
+    }
+    function settleConfirm(v) { closeOverlay("confirmOverlay"); if (confirmResolve) { confirmResolve(v); confirmResolve = null; } }
+    $("confirmOk").addEventListener("click", () => settleConfirm(true));
+    $("confirmCancel").addEventListener("click", () => settleConfirm(false));
+    $("confirmOverlay").addEventListener("click", (e) => { if (e.target === $("confirmOverlay")) settleConfirm(false); });
+
+    /* ---------- generate ---------- */
     async function generate() {
       const title = $("title").value.trim();
       const specs = $("specs").value.trim();
       $("err").style.display = "none";
       $("result").classList.remove("show");
       if (!title) { showErr("Please enter a product title."); return; }
-      const btn = $("go");
-      btn.disabled = true; btn.textContent = "Generating…";
+      const btn = $("go"); btn.disabled = true; btn.textContent = "Generating…";
       try {
         const res = await fetch(ENRICH, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
+          method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ title, specs }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
-        render(data);
+        lastGenerated = data;
+        renderResult(data);
+        catalog = []; // catalog list is now stale
       } catch (e) {
         showErr("Request failed: " + e.message);
       } finally {
         btn.disabled = false; btn.textContent = "Generate content";
       }
     }
-
-    function render(d) {
+    function renderResult(d) {
       $("category").textContent = d.category || "";
       $("description").textContent = d.description || "";
       $("features").innerHTML = (d.features || []).map((f) => "<li>" + esc(f) + "</li>").join("");
       $("keywords").innerHTML = (d.keywords || []).map((k) => '<span class="chip">' + esc(k) + "</span>").join("");
       const t = d.tokens;
       $("tokens").textContent = t && t.total != null
-        ? "Bedrock tokens — in " + t.input + " · out " + t.output + " · total " + t.total
-        : "";
+        ? "Bedrock tokens — in " + t.input + " · out " + t.output + " · total " + t.total : "";
       $("result").classList.add("show");
     }
+    function showErr(m) { const e = $("err"); e.textContent = m; e.style.display = "block"; }
+    $("go").addEventListener("click", generate);
 
+    /* ---------- catalog ---------- */
+    async function loadCatalog() {
+      if (catalog.length) { renderCatalog(); return; } // cached
+      $("catList").textContent = "Loading…";
+      try {
+        const res = await fetch(PRODUCTS);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+        catalog = data.products || [];
+        renderCatalog();
+      } catch (e) {
+        $("catList").textContent = "Failed to load catalog: " + e.message;
+      }
+    }
+    function renderCatalog() {
+      const q = $("catSearch").value.trim().toLowerCase();
+      const sort = $("catSort").value;
+      let items = catalog.filter((p) =>
+        !q || [p.title, p.category, p.description].some((v) => String(v || "").toLowerCase().includes(q)));
+      const cmp = {
+        new: (a, b) => String(b.createdAt).localeCompare(String(a.createdAt)),
+        old: (a, b) => String(a.createdAt).localeCompare(String(b.createdAt)),
+        title: (a, b) => String(a.title).localeCompare(String(b.title)),
+        category: (a, b) => String(a.category).localeCompare(String(b.category)),
+      }[sort];
+      items = items.slice().sort(cmp);
+      if (!items.length) { $("catList").innerHTML = '<div class="empty">' + (catalog.length ? "No products match your search." : "No products yet — generate one!") + "</div>"; return; }
+      $("catList").innerHTML = items.map((p) =>
+        '<div class="item" data-id="' + esc(p.productId) + '" tabindex="0" role="button">' +
+          '<div class="body">' +
+            '<div><span class="t">' + esc(p.title || p.productId) + '</span>' +
+            (p.category ? '<span class="c">' + esc(p.category) + '</span>' : '') + '</div>' +
+            (p.description ? '<div class="d">' + esc(p.description) + '</div>' : '') +
+          '</div>' +
+          '<button class="rm" data-id="' + esc(p.productId) + '" data-title="' + esc(p.title || p.productId) + '">Remove</button>' +
+        '</div>').join("");
+    }
+    $("catSearch").addEventListener("input", renderCatalog);
+    $("catSort").addEventListener("change", renderCatalog);
+
+    async function removeProduct(id, title) {
+      const ok = await confirmDialog('Remove "' + title + '" and its reviews from the catalog?');
+      if (!ok) return false;
+      const res = await fetch(PRODUCTS + "/" + encodeURIComponent(id), { method: "DELETE" });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || ("HTTP " + res.status)); }
+      catalog = catalog.filter((p) => p.productId !== id);
+      return true;
+    }
+    $("catList").addEventListener("click", async (e) => {
+      const btn = e.target.closest(".rm");
+      if (btn) {
+        try {
+          const removed = await removeProduct(btn.getAttribute("data-id"), btn.getAttribute("data-title"));
+          if (removed) { renderCatalog(); toast("Product removed"); }
+        } catch (err) { toast("Delete failed: " + err.message); }
+        return;
+      }
+      const item = e.target.closest(".item");
+      if (item) openDetail(item.getAttribute("data-id"));
+    });
+    // keyboard: Enter/Space on a focused row opens detail
+    $("catList").addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const item = e.target.closest(".item"); if (!item || e.target.closest(".rm")) return;
+      e.preventDefault(); openDetail(item.getAttribute("data-id"));
+    });
+
+    /* ---------- unified detail modal (copy + insights + edit) ---------- */
+    async function openDetail(id) {
+      currentDetail = null;
+      $("modalBody").innerHTML = "<p>Loading…</p>";
+      openOverlay("overlay");
+      try {
+        const res = await fetch(PRODUCTS + "/" + encodeURIComponent(id));
+        const p = await res.json();
+        if (!res.ok) throw new Error(p.error || ("HTTP " + res.status));
+        currentDetail = p;
+        renderDetailView(p);
+      } catch (e) {
+        $("modalBody").innerHTML = '<p class="err" style="display:block">Failed to load: ' + esc(e.message) + "</p>";
+      }
+    }
+    function insightsBlock(dg) {
+      if (!dg) return "";
+      const themes = (dg.themes || []).map((th) =>
+        '<div class="theme"><span class="h">' + esc(th.theme) + "</span>" +
+        '<span class="s ' + esc(th.sentiment) + '">' + esc(th.sentiment) + "</span>" +
+        '<div class="d">' + esc(th.detail) + "</div></div>").join("");
+      return '<div class="divider"></div><h3>Review insights</h3>' +
+        '<div style="margin-top:10px">' +
+          '<div class="stat"><span class="n">' + (dg.averageRating != null ? esc(dg.averageRating) : "—") + '</span><span class="l">Avg rating</span></div>' +
+          '<div class="stat"><span class="n">' + esc(dg.reviewCount ?? 0) + '</span><span class="l">Reviews</span></div>' +
+          '<div class="stat"><span class="n" style="font-size:17px">' + esc(dg.overallSentiment || "—") + '</span><span class="l">Sentiment</span></div>' +
+        "</div>" +
+        (dg.summary ? '<p class="desc">' + esc(dg.summary) + "</p>" : "") + themes;
+    }
+    function renderDetailView(p) {
+      $("modalBody").innerHTML =
+        '<h2 id="modalTitle">' + esc(p.title || p.productId) + "</h2>" +
+        (p.category ? '<span class="badge">' + esc(p.category) + "</span>" : "") +
+        (p.description ? '<p class="desc">' + esc(p.description) + "</p>" : "") +
+        (p.specs ? '<h3>Raw specs</h3><p class="desc">' + esc(p.specs) + "</p>" : "") +
+        ((p.features && p.features.length) ? '<h3>Features</h3><ul class="features">' + p.features.map((f) => "<li>" + esc(f) + "</li>").join("") + "</ul>" : "") +
+        ((p.keywords && p.keywords.length) ? '<h3>SEO keywords</h3><div class="chips">' + p.keywords.map((k) => '<span class="chip">' + esc(k) + "</span>").join("") + "</div>" : "") +
+        insightsBlock(p.digest) +
+        '<div class="divider"></div><div class="row" style="margin-top:16px">' +
+          '<button class="mini" data-act="copy-desc">Copy description</button>' +
+          '<button class="mini" data-act="copy-kw">Copy keywords</button>' +
+          '<button class="mini" data-act="edit">Edit &amp; regenerate</button>' +
+          '<button class="mini danger" data-act="delete">Remove</button>' +
+        "</div>" +
+        '<div class="meta">ID: ' + esc(p.productId) + (p.createdAt ? " · created " + esc(p.createdAt) : "") + (p.updatedAt ? " · updated " + esc(p.updatedAt) : "") + "</div>";
+    }
+    function renderDetailEdit(p) {
+      $("modalBody").innerHTML =
+        '<h2 id="modalTitle">Edit &amp; regenerate</h2>' +
+        '<label for="editTitle">Product title</label>' +
+        '<input id="editTitle" value="' + esc(p.title || "") + '" />' +
+        '<label for="editSpecs">Specs</label>' +
+        '<textarea id="editSpecs">' + esc(typeof p.specs === "string" ? p.specs : (p.specs ? JSON.stringify(p.specs) : "")) + "</textarea>" +
+        '<div class="row" style="margin-top:16px; justify-content:flex-end">' +
+          '<button class="mini ghost" data-act="cancel-edit">Cancel</button>' +
+          '<button class="mini" data-act="regenerate">Regenerate</button>' +
+        "</div>";
+      $("editTitle").focus();
+    }
+    $("modalBody").addEventListener("click", async (e) => {
+      const b = e.target.closest("[data-act]"); if (!b || !currentDetail) return;
+      const act = b.dataset.act;
+      if (act === "copy-desc") return copyText(currentDetail.description || "", "Description");
+      if (act === "copy-kw") return copyText((currentDetail.keywords || []).join(", "), "Keywords");
+      if (act === "edit") return renderDetailEdit(currentDetail);
+      if (act === "cancel-edit") return renderDetailView(currentDetail);
+      if (act === "delete") {
+        try {
+          const removed = await removeProduct(currentDetail.productId, currentDetail.title || currentDetail.productId);
+          if (removed) { closeOverlay("overlay"); renderCatalog(); toast("Product removed"); }
+        } catch (err) { toast("Delete failed: " + err.message); }
+        return;
+      }
+      if (act === "regenerate") {
+        const title = $("editTitle").value.trim();
+        const specs = $("editSpecs").value.trim();
+        if (!title) { toast("Title is required"); return; }
+        b.disabled = true; b.textContent = "Regenerating…";
+        try {
+          const res = await fetch(PRODUCTS + "/" + encodeURIComponent(currentDetail.productId), {
+            method: "PUT", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ title, specs }),
+          });
+          const updated = await res.json();
+          if (!res.ok) throw new Error(updated.error || ("HTTP " + res.status));
+          updated.digest = currentDetail.digest; // PUT doesn't re-run the digest
+          currentDetail = updated;
+          renderDetailView(updated);
+          catalog = []; // list is now stale
+          toast("Content regenerated");
+        } catch (err) {
+          b.disabled = false; b.textContent = "Regenerate";
+          toast("Regenerate failed: " + err.message);
+        }
+      }
+    });
+
+    /* ---------- insights ---------- */
     function digestCard(d) {
       const themes = (d.themes || []).map((th) =>
         '<div class="theme"><span class="h">' + esc(th.theme) + "</span>" +
         '<span class="s ' + esc(th.sentiment) + '">' + esc(th.sentiment) + "</span>" +
-        '<div class="d">' + esc(th.detail) + "</div></div>"
-      ).join("");
-      const tok = d.tokens && d.tokens.total != null
-        ? " · " + d.tokens.total + " tokens" : "";
+        '<div class="d">' + esc(th.detail) + "</div></div>").join("");
+      const tok = d.tokens && d.tokens.total != null ? " · " + d.tokens.total + " tokens" : "";
       return '<div class="pcard">' +
         "<h2>" + esc(d.title || d.productId) + "</h2>" +
         '<div style="margin-bottom:10px">' +
@@ -213,7 +490,6 @@
         '<div class="meta">Generated ' + esc(d.generatedAt || "") + tok + "</div>" +
       "</div>";
     }
-
     async function loadDigest() {
       $("digest").textContent = "Loading…";
       try {
@@ -221,85 +497,12 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
         const digests = data.digests || [];
-        if (!digests.length) { $("digest").textContent = "No insights yet — the daily review job hasn't run. Invoke it manually to populate per-product digests."; return; }
+        if (!digests.length) { $("digest").innerHTML = '<div class="empty">No insights yet — the daily review job hasn\'t run.</div>'; return; }
         $("digest").innerHTML = digests.map(digestCard).join("");
       } catch (e) {
         $("digest").textContent = "Failed to load insights: " + e.message;
       }
     }
-
-    async function loadCatalog() {
-      $("catList").textContent = "Loading…";
-      try {
-        const res = await fetch(PRODUCTS);
-        const data = await res.json();
-        const items = data.products || [];
-        if (!items.length) { $("catList").textContent = "No products yet — generate one!"; return; }
-        $("catList").innerHTML = items.map((p) =>
-          '<div class="item" data-id="' + esc(p.productId) + '">' +
-            '<div class="body">' +
-              '<div><span class="t">' + esc(p.title || p.productId) + '</span>' +
-              (p.category ? '<span class="c">' + esc(p.category) + '</span>' : '') + '</div>' +
-              (p.description ? '<div class="d">' + esc(p.description) + '</div>' : '') +
-            '</div>' +
-            '<button class="rm" data-id="' + esc(p.productId) + '" data-title="' + esc(p.title || p.productId) + '">Remove</button>' +
-          '</div>'
-        ).join("");
-      } catch (e) {
-        $("catList").textContent = "Failed to load catalog: " + e.message;
-      }
-    }
-
-    // catalog clicks: Remove button deletes; clicking the row opens the detail modal
-    $("catList").addEventListener("click", async (e) => {
-      const btn = e.target.closest(".rm");
-      if (btn) {
-        const id = btn.getAttribute("data-id");
-        const title = btn.getAttribute("data-title");
-        if (!confirm('Remove "' + title + '" and its reviews from the catalog?')) return;
-        btn.disabled = true; btn.textContent = "Removing…";
-        try {
-          const res = await fetch(PRODUCTS + "/" + encodeURIComponent(id), { method: "DELETE" });
-          if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || ("HTTP " + res.status)); }
-          const row = btn.closest(".item"); if (row) row.remove();
-          if (!$("catList").querySelector(".item")) $("catList").textContent = "No products yet — generate one!";
-        } catch (err) {
-          btn.disabled = false; btn.textContent = "Remove";
-          alert("Delete failed: " + err.message);
-        }
-        return;
-      }
-      const item = e.target.closest(".item");
-      if (item) openDetail(item.getAttribute("data-id"));
-    });
-
-    async function openDetail(id) {
-      $("modalBody").innerHTML = "<p>Loading…</p>";
-      $("overlay").classList.add("show");
-      try {
-        const res = await fetch(PRODUCTS + "/" + encodeURIComponent(id));
-        const p = await res.json();
-        if (!res.ok) throw new Error(p.error || ("HTTP " + res.status));
-        $("modalBody").innerHTML =
-          "<h2>" + esc(p.title || p.productId) + "</h2>" +
-          (p.category ? '<span class="badge">' + esc(p.category) + "</span>" : "") +
-          (p.description ? '<p class="desc">' + esc(p.description) + "</p>" : "") +
-          (p.specs ? "<h3>Raw specs</h3><p class=\"desc\">" + esc(p.specs) + "</p>" : "") +
-          ((p.features && p.features.length) ? "<h3>Features</h3><ul class=\"features\">" + p.features.map((f) => "<li>" + esc(f) + "</li>").join("") + "</ul>" : "") +
-          ((p.keywords && p.keywords.length) ? "<h3>SEO keywords</h3><div class=\"chips\">" + p.keywords.map((k) => '<span class="chip">' + esc(k) + "</span>").join("") + "</div>" : "") +
-          '<div class="meta">ID: ' + esc(p.productId) + (p.createdAt ? " · " + esc(p.createdAt) : "") + "</div>";
-      } catch (e) {
-        $("modalBody").innerHTML = '<p class="err" style="display:block">Failed to load: ' + esc(e.message) + "</p>";
-      }
-    }
-    function closeModal() { $("overlay").classList.remove("show"); }
-    $("closeModal").addEventListener("click", closeModal);
-    $("overlay").addEventListener("click", (e) => { if (e.target === $("overlay")) closeModal(); });
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
-
-    function showErr(m) { const e = $("err"); e.textContent = m; e.style.display = "block"; }
-    function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
-    $("go").addEventListener("click", generate);
   </script>
 </body>
 </html>

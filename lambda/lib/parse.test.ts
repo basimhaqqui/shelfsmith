@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { extractJsonObject } from './parse';
-import { parseEnriched } from '../enrich';
+import { parseEnriched } from './enrichment';
 import { parseDigest } from '../review-digest';
 
 test('extractJsonObject: clean JSON', () => {

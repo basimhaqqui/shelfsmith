@@ -62,10 +62,17 @@ export class ShelfSmithStack extends Stack {
       new PolicyStatement({ actions: ['dynamodb:Scan'], resources: [table.tableArn] }),
     );
 
-    // get-product: single-item detail (GetItem)
+    // get-product: product + its digest from one partition (Query)
     const getProductFn = fn('GetProductFunction', 'get-product.ts', { TABLE_NAME: table.tableName });
     getProductFn.addToRolePolicy(
-      new PolicyStatement({ actions: ['dynamodb:GetItem'], resources: [table.tableArn] }),
+      new PolicyStatement({ actions: ['dynamodb:Query'], resources: [table.tableArn] }),
+    );
+
+    // update-product: edit + regenerate an existing product's copy (Bedrock -> overwrite)
+    const updateFn = fn('UpdateProductFunction', 'update-product.ts', { MODEL_ID, TABLE_NAME: table.tableName }, 30);
+    updateFn.addToRolePolicy(invokeModel());
+    updateFn.addToRolePolicy(
+      new PolicyStatement({ actions: ['dynamodb:GetItem', 'dynamodb:PutItem'], resources: [table.tableArn] }),
     );
 
     // delete-product: remove a product + its reviews
@@ -104,13 +111,14 @@ export class ShelfSmithStack extends Stack {
       description: 'ShelfSmith product enrichment + catalog endpoints',
       corsPreflight: {
         allowOrigins: ['*'],
-        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.DELETE, CorsHttpMethod.OPTIONS],
+        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.PUT, CorsHttpMethod.DELETE, CorsHttpMethod.OPTIONS],
         allowHeaders: ['content-type'],
       },
     });
     httpApi.addRoutes({ path: '/enrich', methods: [HttpMethod.POST], integration: new HttpLambdaIntegration('EnrichIntegration', enrichFn) });
     httpApi.addRoutes({ path: '/products', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('ProductsIntegration', productsFn) });
     httpApi.addRoutes({ path: '/products/{id}', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('GetProductIntegration', getProductFn) });
+    httpApi.addRoutes({ path: '/products/{id}', methods: [HttpMethod.PUT], integration: new HttpLambdaIntegration('UpdateIntegration', updateFn) });
     httpApi.addRoutes({ path: '/products/{id}', methods: [HttpMethod.DELETE], integration: new HttpLambdaIntegration('DeleteIntegration', deleteFn) });
     httpApi.addRoutes({ path: '/digest', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('GetDigestIntegration', getDigestFn) });
 
