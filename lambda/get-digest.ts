@@ -1,27 +1,34 @@
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const TABLE_NAME = process.env.TABLE_NAME!;
 
-function json(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
-  return { statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
-}
-
-// GET /digest — latest review-sentiment digest. Digests live under productId "DIGEST"
-// with the ISO timestamp as the sort key, so newest-first + limit 1 gets the current one.
+// GET /digest — per-product review-sentiment digests (one per product with reviews).
+// Each digest is stored as sk = "DIGEST" in its product's partition, so a filtered
+// Scan collects them all. At real scale a GSI on sk would replace this Scan.
 export const handler = async (): Promise<APIGatewayProxyResultV2> => {
-  const res = await ddb.send(
-    new QueryCommand({
-      TableName: TABLE_NAME,
-      KeyConditionExpression: 'productId = :d',
-      ExpressionAttributeValues: { ':d': 'DIGEST' },
-      ScanIndexForward: false,
-      Limit: 1,
-    }),
-  );
-  const digest = res.Items?.[0];
-  if (!digest) return json(404, { error: 'no digest yet — the scheduled job has not run' });
-  return json(200, digest);
+  const digests: Record<string, any>[] = [];
+  let ExclusiveStartKey: Record<string, unknown> | undefined;
+  do {
+    const res = await ddb.send(
+      new ScanCommand({
+        TableName: TABLE_NAME,
+        FilterExpression: 'sk = :d',
+        ExpressionAttributeValues: { ':d': 'DIGEST' },
+        ExclusiveStartKey,
+      }),
+    );
+    digests.push(...((res.Items ?? []) as Record<string, any>[]));
+    ExclusiveStartKey = res.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+
+  digests.sort((a, b) => String(a.title).localeCompare(String(b.title)));
+
+  return {
+    statusCode: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ count: digests.length, digests }),
+  };
 };

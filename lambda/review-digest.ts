@@ -8,13 +8,13 @@ const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const MODEL_ID = process.env.MODEL_ID!;
 const TABLE_NAME = process.env.TABLE_NAME!;
 
-const SYSTEM_PROMPT = `You are an analyst summarizing customer reviews for an e-commerce
-electronics catalog. Given a list of reviews, summarize overall sentiment and surface
-recurring themes (issues or praise that show up across multiple reviews).
+const SYSTEM_PROMPT = `You are an analyst summarizing customer reviews for a single product
+in an e-commerce electronics catalog. Given that product's reviews, summarize overall
+sentiment and surface recurring themes (issues or praise that show up across multiple reviews).
 Respond with ONLY a single JSON object — no markdown fences, no commentary — with exactly:
   "overallSentiment": string, a short verdict like "mostly positive" or "mixed",
-  "summary": string, 2-3 sentences capturing the big picture,
-  "themes": array of 3-6 objects, each { "theme": string, "sentiment": "positive"|"negative"|"mixed", "detail": string }.`;
+  "summary": string, 2-3 sentences capturing the big picture for this product,
+  "themes": array of 2-5 objects, each { "theme": string, "sentiment": "positive"|"negative"|"mixed", "detail": string }.`;
 
 interface Digest {
   overallSentiment: string;
@@ -44,66 +44,82 @@ async function scanAll(): Promise<Row[]> {
   return rows;
 }
 
-export const handler = async () => {
-  const rows = await scanAll();
-  const titles = new Map<string, string>();
-  rows.filter((r) => r.sk === 'PRODUCT').forEach((p) => titles.set(p.productId, String(p.title ?? p.productId)));
-  const reviews = rows.filter((r) => r.sk.startsWith('REVIEW#'));
-
-  if (reviews.length === 0) {
-    console.log('no reviews to summarize');
-    return { ok: false, message: 'no reviews found' };
-  }
-
-  const ratings = reviews.map((r) => Number(r.rating)).filter((n) => !Number.isNaN(n));
-  const averageRating =
-    ratings.length > 0 ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 100) / 100 : null;
-
-  const reviewLines = reviews
-    .map((r) => `[${titles.get(r.productId) ?? r.productId}] (${r.rating}/5) ${r.text}`)
-    .join('\n');
-
-  // call Bedrock
+// Summarize one product's reviews.
+async function summarize(title: string, reviews: Row[]) {
+  const reviewLines = reviews.map((r) => `(${r.rating}/5) ${r.text}`).join('\n');
   const res = await bedrock.send(
     new ConverseCommand({
       modelId: MODEL_ID,
       system: [{ text: SYSTEM_PROMPT }],
-      messages: [{ role: 'user', content: [{ text: `Reviews:\n${reviewLines}` }] }],
-      inferenceConfig: { maxTokens: 1024, temperature: 0.4 },
+      messages: [{ role: 'user', content: [{ text: `Product: ${title}\nReviews:\n${reviewLines}` }] }],
+      inferenceConfig: { maxTokens: 800, temperature: 0.4 },
     }),
   );
   const raw = res.output?.message?.content?.[0]?.text;
   if (!raw) throw new Error('empty model response');
-  const tokens = {
-    input: res.usage?.inputTokens ?? null,
-    output: res.usage?.outputTokens ?? null,
-    total: res.usage?.totalTokens ?? null,
-  };
+  return { digest: parseDigest(raw), usage: res.usage };
+}
 
-  let digest: Digest;
-  try {
-    digest = parseDigest(raw);
-  } catch (err) {
-    console.error('could not parse model output:', err, '\nraw:', raw);
-    throw new Error('model did not return valid JSON');
+export const handler = async () => {
+  const rows = await scanAll();
+  const products = rows.filter((r) => r.sk === 'PRODUCT');
+
+  // group reviews under their product
+  const reviewsByProduct = new Map<string, Row[]>();
+  rows
+    .filter((r) => r.sk.startsWith('REVIEW#'))
+    .forEach((r) => {
+      const list = reviewsByProduct.get(r.productId) ?? [];
+      list.push(r);
+      reviewsByProduct.set(r.productId, list);
+    });
+
+  if (reviewsByProduct.size === 0) {
+    console.log('no reviews to summarize');
+    return { ok: false, message: 'no reviews found' };
   }
 
-  // persist the digest
   const generatedAt = new Date().toISOString();
-  const item = {
-    productId: 'DIGEST',
-    sk: generatedAt,
-    generatedAt,
-    reviewCount: reviews.length,
-    averageRating,
-    tokens,
-    ...digest,
-  };
-  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+  const written: string[] = [];
 
-  console.log(
-    `digest written: ${reviews.length} reviews, sentiment "${digest.overallSentiment}", ` +
-      `tokens in/out/total: ${tokens.input}/${tokens.output}/${tokens.total}`,
-  );
-  return item;
+  // one digest per product, stored as sk="DIGEST" in that product's own partition.
+  // sequential to stay comfortably under Bedrock rate limits at this scale.
+  for (const product of products) {
+    const reviews = reviewsByProduct.get(product.productId);
+    if (!reviews || reviews.length === 0) continue;
+    const title = String(product.title ?? product.productId);
+
+    const ratings = reviews.map((r) => Number(r.rating)).filter((n) => !Number.isNaN(n));
+    const averageRating =
+      ratings.length > 0 ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 100) / 100 : null;
+
+    let digest: Digest;
+    let usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
+    try {
+      ({ digest, usage } = await summarize(title, reviews));
+    } catch (err) {
+      console.error(`digest failed for ${product.productId}:`, err);
+      continue;
+    }
+
+    const item = {
+      productId: product.productId,
+      sk: 'DIGEST',
+      title,
+      generatedAt,
+      reviewCount: reviews.length,
+      averageRating,
+      tokens: {
+        input: usage?.inputTokens ?? null,
+        output: usage?.outputTokens ?? null,
+        total: usage?.totalTokens ?? null,
+      },
+      ...digest,
+    };
+    await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+    written.push(product.productId);
+    console.log(`digest written for "${title}": ${reviews.length} reviews, "${digest.overallSentiment}"`);
+  }
+
+  return { ok: true, digestsWritten: written.length, generatedAt };
 };

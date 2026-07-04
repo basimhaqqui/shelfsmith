@@ -57,6 +57,9 @@
     .rm:disabled { opacity:.5; cursor:progress; }
     .hidden { display:none; }
     /* insights */
+    .pcard { background:var(--card); border:1px solid #262b44; border-radius:16px; padding:22px; margin-bottom:16px; }
+    .pcard:last-child { margin-bottom:0; }
+    .pcard h2 { margin:0 0 12px; font-size:19px; }
     .stat { display:inline-block; margin:0 22px 4px 0; }
     .stat .n { font-size:26px; font-weight:700; }
     .stat .l { display:block; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
@@ -119,9 +122,7 @@
     </div>
 
     <div id="insView" class="hidden">
-      <div class="card">
-        <div id="digest">Loading…</div>
-      </div>
+      <div id="digest">Loading…</div>
     </div>
   </div>
 
@@ -192,29 +193,36 @@
       $("result").classList.add("show");
     }
 
+    function digestCard(d) {
+      const themes = (d.themes || []).map((th) =>
+        '<div class="theme"><span class="h">' + esc(th.theme) + "</span>" +
+        '<span class="s ' + esc(th.sentiment) + '">' + esc(th.sentiment) + "</span>" +
+        '<div class="d">' + esc(th.detail) + "</div></div>"
+      ).join("");
+      const tok = d.tokens && d.tokens.total != null
+        ? " · " + d.tokens.total + " tokens" : "";
+      return '<div class="pcard">' +
+        "<h2>" + esc(d.title || d.productId) + "</h2>" +
+        '<div style="margin-bottom:10px">' +
+          '<div class="stat"><span class="n">' + (d.averageRating != null ? esc(d.averageRating) : "—") + '</span><span class="l">Avg rating</span></div>' +
+          '<div class="stat"><span class="n">' + esc(d.reviewCount ?? 0) + '</span><span class="l">Reviews</span></div>' +
+          '<div class="stat"><span class="n" style="font-size:18px">' + esc(d.overallSentiment || "—") + '</span><span class="l">Sentiment</span></div>' +
+        "</div>" +
+        '<p class="desc">' + esc(d.summary || "") + "</p>" +
+        "<h3>Recurring themes</h3>" + themes +
+        '<div class="meta">Generated ' + esc(d.generatedAt || "") + tok + "</div>" +
+      "</div>";
+    }
+
     async function loadDigest() {
       $("digest").textContent = "Loading…";
       try {
         const res = await fetch(DIGEST);
-        const d = await res.json();
-        if (res.status === 404) { $("digest").textContent = "No digest yet — the daily review job hasn't run. Invoke it manually to populate this."; return; }
-        if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
-        const themes = (d.themes || []).map((th) =>
-          '<div class="theme"><span class="h">' + esc(th.theme) + "</span>" +
-          '<span class="s ' + esc(th.sentiment) + '">' + esc(th.sentiment) + "</span>" +
-          '<div class="d">' + esc(th.detail) + "</div></div>"
-        ).join("");
-        const tok = d.tokens && d.tokens.total != null
-          ? '<div class="meta">Bedrock tokens — in ' + d.tokens.input + " · out " + d.tokens.output + " · total " + d.tokens.total + "</div>" : "";
-        $("digest").innerHTML =
-          '<div style="margin-bottom:10px">' +
-            '<div class="stat"><span class="n">' + (d.averageRating != null ? esc(d.averageRating) : "—") + '</span><span class="l">Avg rating</span></div>' +
-            '<div class="stat"><span class="n">' + esc(d.reviewCount ?? 0) + '</span><span class="l">Reviews</span></div>' +
-            '<div class="stat"><span class="n" style="font-size:18px">' + esc(d.overallSentiment || "—") + '</span><span class="l">Sentiment</span></div>' +
-          "</div>" +
-          '<p class="desc">' + esc(d.summary || "") + "</p>" +
-          "<h3>Recurring themes</h3>" + themes +
-          '<div class="meta">Generated ' + esc(d.generatedAt || "") + "</div>" + tok;
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+        const digests = data.digests || [];
+        if (!digests.length) { $("digest").textContent = "No insights yet — the daily review job hasn't run. Invoke it manually to populate per-product digests."; return; }
+        $("digest").innerHTML = digests.map(digestCard).join("");
       } catch (e) {
         $("digest").textContent = "Failed to load insights: " + e.message;
       }

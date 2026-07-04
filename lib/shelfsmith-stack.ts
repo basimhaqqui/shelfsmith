@@ -77,10 +77,10 @@ export class ShelfSmithStack extends Stack {
       }),
     );
 
-    // get-digest: read the latest review-sentiment digest (Query DIGEST partition)
+    // get-digest: read every product's review-sentiment digest (Scan for sk="DIGEST")
     const getDigestFn = fn('GetDigestFunction', 'get-digest.ts', { TABLE_NAME: table.tableName });
     getDigestFn.addToRolePolicy(
-      new PolicyStatement({ actions: ['dynamodb:Query'], resources: [table.tableArn] }),
+      new PolicyStatement({ actions: ['dynamodb:Scan'], resources: [table.tableArn] }),
     );
 
     // review-digest: scan reviews -> Bedrock summary -> persist
