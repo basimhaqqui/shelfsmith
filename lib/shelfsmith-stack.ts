@@ -77,6 +77,12 @@ export class ShelfSmithStack extends Stack {
       }),
     );
 
+    // get-digest: read the latest review-sentiment digest (Query DIGEST partition)
+    const getDigestFn = fn('GetDigestFunction', 'get-digest.ts', { TABLE_NAME: table.tableName });
+    getDigestFn.addToRolePolicy(
+      new PolicyStatement({ actions: ['dynamodb:Query'], resources: [table.tableArn] }),
+    );
+
     // review-digest: scan reviews -> Bedrock summary -> persist
     const digestFn = fn('ReviewDigestFunction', 'review-digest.ts', { MODEL_ID, TABLE_NAME: table.tableName }, 60);
     digestFn.addToRolePolicy(invokeModel());
@@ -106,6 +112,7 @@ export class ShelfSmithStack extends Stack {
     httpApi.addRoutes({ path: '/products', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('ProductsIntegration', productsFn) });
     httpApi.addRoutes({ path: '/products/{id}', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('GetProductIntegration', getProductFn) });
     httpApi.addRoutes({ path: '/products/{id}', methods: [HttpMethod.DELETE], integration: new HttpLambdaIntegration('DeleteIntegration', deleteFn) });
+    httpApi.addRoutes({ path: '/digest', methods: [HttpMethod.GET], integration: new HttpLambdaIntegration('GetDigestIntegration', getDigestFn) });
 
     // Static web UI: private S3 + CloudFront (OAC, HTTPS)
     const siteBucket = new Bucket(this, 'WebBucket', {

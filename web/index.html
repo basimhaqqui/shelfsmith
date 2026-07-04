@@ -56,6 +56,16 @@
     .rm:hover { background:#311a23; }
     .rm:disabled { opacity:.5; cursor:progress; }
     .hidden { display:none; }
+    /* insights */
+    .stat { display:inline-block; margin:0 22px 4px 0; }
+    .stat .n { font-size:26px; font-weight:700; }
+    .stat .l { display:block; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+    .theme { border-top:1px solid #232845; padding:14px 0; }
+    .theme:first-of-type { border-top:0; }
+    .theme .h { font-weight:600; }
+    .theme .s { font-size:12px; padding:2px 9px; border-radius:999px; margin-left:8px; border:1px solid #2f3760; }
+    .s.positive { color:var(--accent2); } .s.negative { color:var(--danger); } .s.mixed { color:#ffcf6a; }
+    .theme .d { color:var(--muted); font-size:14px; margin-top:5px; line-height:1.5; }
     /* modal */
     .overlay { position:fixed; inset:0; background:rgba(6,8,16,.72); display:none;
                align-items:center; justify-content:center; padding:20px; z-index:50; }
@@ -78,6 +88,7 @@
     <div class="tabs">
       <div class="tab active" id="tabGen">Generate</div>
       <div class="tab" id="tabCat">Catalog</div>
+      <div class="tab" id="tabIns">Insights</div>
     </div>
 
     <div id="genView">
@@ -97,12 +108,19 @@
         <ul class="features" id="features"></ul>
         <h3>SEO keywords</h3>
         <div class="chips" id="keywords"></div>
+        <div class="meta" id="tokens"></div>
       </div>
     </div>
 
     <div id="catView" class="hidden">
       <div class="card">
         <div id="catList">Loading…</div>
+      </div>
+    </div>
+
+    <div id="insView" class="hidden">
+      <div class="card">
+        <div id="digest">Loading…</div>
       </div>
     </div>
   </div>
@@ -119,18 +137,23 @@
     const BASE = window.SHELFSMITH_API_BASE || "";
     const ENRICH = BASE + "/enrich";
     const PRODUCTS = BASE + "/products";
+    const DIGEST = BASE + "/digest";
     const $ = (id) => document.getElementById(id);
     $("endpointHint").textContent = BASE ? ("API: " + BASE) : "API endpoint not configured";
 
-    $("tabGen").addEventListener("click", () => switchTab("gen"));
-    $("tabCat").addEventListener("click", () => switchTab("cat"));
+    const TABS = {
+      gen: { tab: "tabGen", view: "genView" },
+      cat: { tab: "tabCat", view: "catView", load: () => loadCatalog() },
+      ins: { tab: "tabIns", view: "insView", load: () => loadDigest() },
+    };
+    Object.entries(TABS).forEach(([k, t]) => $(t.tab).addEventListener("click", () => switchTab(k)));
     function switchTab(which) {
-      const gen = which === "gen";
-      $("tabGen").classList.toggle("active", gen);
-      $("tabCat").classList.toggle("active", !gen);
-      $("genView").classList.toggle("hidden", !gen);
-      $("catView").classList.toggle("hidden", gen);
-      if (!gen) loadCatalog();
+      Object.entries(TABS).forEach(([k, t]) => {
+        const on = k === which;
+        $(t.tab).classList.toggle("active", on);
+        $(t.view).classList.toggle("hidden", !on);
+      });
+      if (TABS[which].load) TABS[which].load();
     }
 
     async function generate() {
@@ -162,7 +185,39 @@
       $("description").textContent = d.description || "";
       $("features").innerHTML = (d.features || []).map((f) => "<li>" + esc(f) + "</li>").join("");
       $("keywords").innerHTML = (d.keywords || []).map((k) => '<span class="chip">' + esc(k) + "</span>").join("");
+      const t = d.tokens;
+      $("tokens").textContent = t && t.total != null
+        ? "Bedrock tokens — in " + t.input + " · out " + t.output + " · total " + t.total
+        : "";
       $("result").classList.add("show");
+    }
+
+    async function loadDigest() {
+      $("digest").textContent = "Loading…";
+      try {
+        const res = await fetch(DIGEST);
+        const d = await res.json();
+        if (res.status === 404) { $("digest").textContent = "No digest yet — the daily review job hasn't run. Invoke it manually to populate this."; return; }
+        if (!res.ok) throw new Error(d.error || ("HTTP " + res.status));
+        const themes = (d.themes || []).map((th) =>
+          '<div class="theme"><span class="h">' + esc(th.theme) + "</span>" +
+          '<span class="s ' + esc(th.sentiment) + '">' + esc(th.sentiment) + "</span>" +
+          '<div class="d">' + esc(th.detail) + "</div></div>"
+        ).join("");
+        const tok = d.tokens && d.tokens.total != null
+          ? '<div class="meta">Bedrock tokens — in ' + d.tokens.input + " · out " + d.tokens.output + " · total " + d.tokens.total + "</div>" : "";
+        $("digest").innerHTML =
+          '<div style="margin-bottom:10px">' +
+            '<div class="stat"><span class="n">' + (d.averageRating != null ? esc(d.averageRating) : "—") + '</span><span class="l">Avg rating</span></div>' +
+            '<div class="stat"><span class="n">' + esc(d.reviewCount ?? 0) + '</span><span class="l">Reviews</span></div>' +
+            '<div class="stat"><span class="n" style="font-size:18px">' + esc(d.overallSentiment || "—") + '</span><span class="l">Sentiment</span></div>' +
+          "</div>" +
+          '<p class="desc">' + esc(d.summary || "") + "</p>" +
+          "<h3>Recurring themes</h3>" + themes +
+          '<div class="meta">Generated ' + esc(d.generatedAt || "") + "</div>" + tok;
+      } catch (e) {
+        $("digest").textContent = "Failed to load insights: " + e.message;
+      }
     }
 
     async function loadCatalog() {

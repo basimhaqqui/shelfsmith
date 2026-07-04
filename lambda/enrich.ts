@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { extractJsonObject } from './lib/parse';
 
 const bedrock = new BedrockRuntimeClient({}); // region from the Lambda runtime
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -32,20 +33,8 @@ function json(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
   };
 }
 
-// Models can wrap JSON in prose or ```fences```, so pull out the object defensively
-// instead of trusting the response to be clean JSON.
-function parseEnriched(raw: string): Enriched {
-  let text = raw.trim();
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) text = fenced[1].trim();
-  if (!text.startsWith('{')) {
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start === -1 || end === -1) throw new Error('no JSON object found');
-    text = text.slice(start, end + 1);
-  }
-
-  const obj = JSON.parse(text);
+export function parseEnriched(raw: string): Enriched {
+  const obj = extractJsonObject(raw);
   if (
     typeof obj.description !== 'string' ||
     typeof obj.category !== 'string' ||
@@ -82,6 +71,7 @@ const enrich = async (
 
   // call Bedrock
   let raw: string | undefined;
+  let usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
   try {
     const res = await bedrock.send(
       new ConverseCommand({
@@ -92,6 +82,7 @@ const enrich = async (
       }),
     );
     raw = res.output?.message?.content?.[0]?.text;
+    usage = res.usage;
   } catch (err) {
     console.error('bedrock invocation failed', err);
     return json(502, { error: 'model invocation failed' });
@@ -110,7 +101,12 @@ const enrich = async (
   // persist to DynamoDB
   const productId = randomUUID();
   const createdAt = new Date().toISOString();
-  const item = { productId, sk: 'PRODUCT', title, specs, ...enriched, createdAt };
+  const tokens = {
+    input: usage?.inputTokens ?? null,
+    output: usage?.outputTokens ?? null,
+    total: usage?.totalTokens ?? null,
+  };
+  const item = { productId, sk: 'PRODUCT', title, specs, ...enriched, createdAt, tokens };
   try {
     await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
   } catch (err) {
@@ -118,7 +114,8 @@ const enrich = async (
     return json(502, { error: 'failed to persist product' });
   }
 
-  return json(201, { productId, title, ...enriched, createdAt });
+  console.log(`enriched "${title}" — tokens in/out/total: ${tokens.input}/${tokens.output}/${tokens.total}`);
+  return json(201, { productId, title, ...enriched, createdAt, tokens });
 };
 
 export const handler = async (

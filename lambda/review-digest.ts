@@ -1,6 +1,7 @@
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, ScanCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { extractJsonObject } from './lib/parse';
 
 const bedrock = new BedrockRuntimeClient({});
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -21,21 +22,12 @@ interface Digest {
   themes: { theme: string; sentiment: string; detail: string }[];
 }
 
-function parseDigest(raw: string): Digest {
-  let text = raw.trim();
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) text = fenced[1].trim();
-  if (!text.startsWith('{')) {
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start === -1 || end === -1) throw new Error('no JSON object found');
-    text = text.slice(start, end + 1);
-  }
-  const obj = JSON.parse(text);
+export function parseDigest(raw: string): Digest {
+  const obj = extractJsonObject(raw);
   if (typeof obj.overallSentiment !== 'string' || typeof obj.summary !== 'string' || !Array.isArray(obj.themes)) {
     throw new Error('missing required fields');
   }
-  return obj as Digest;
+  return obj as unknown as Digest;
 }
 
 interface Row { productId: string; sk: string; [k: string]: unknown }
@@ -82,6 +74,11 @@ export const handler = async () => {
   );
   const raw = res.output?.message?.content?.[0]?.text;
   if (!raw) throw new Error('empty model response');
+  const tokens = {
+    input: res.usage?.inputTokens ?? null,
+    output: res.usage?.outputTokens ?? null,
+    total: res.usage?.totalTokens ?? null,
+  };
 
   let digest: Digest;
   try {
@@ -99,10 +96,14 @@ export const handler = async () => {
     generatedAt,
     reviewCount: reviews.length,
     averageRating,
+    tokens,
     ...digest,
   };
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
 
-  console.log(`digest written: ${reviews.length} reviews, sentiment "${digest.overallSentiment}"`);
+  console.log(
+    `digest written: ${reviews.length} reviews, sentiment "${digest.overallSentiment}", ` +
+      `tokens in/out/total: ${tokens.input}/${tokens.output}/${tokens.total}`,
+  );
   return item;
 };
